@@ -51,6 +51,23 @@
   .foot { margin-top:24px; text-align:center; font-size:12px; color:#9BA1AA; line-height:1.7; }
   .day-mark { color:#2563EB; font-weight:600; margin-left:auto; font-size:12px; }
   .day-mark.rest-mark { color:#8A9099; }
+
+  /* 进度追踪 */
+  .prog { display:flex; align-items:center; gap:14px; margin-top:14px; background:rgba(255,255,255,.07); border-radius:14px; padding:12px 14px; }
+  .prog .ring { width:58px; height:58px; flex-shrink:0; display:block; }
+  .prog .prog-info { flex:1; min-width:0; }
+  .prog .prog-pct { font-size:24px; font-weight:700; color:#4ADE80; line-height:1.1; }
+  .prog .prog-sub { font-size:12px; color:#C9CDD4; margin-top:4px; }
+  .prog.prog-rest .prog-pct { color:#9BA1AA; }
+
+  .check-item { display:flex; gap:10px; align-items:flex-start; padding:7px 0; border-top:1px solid #F2F3F5; }
+  .check-item:first-child { border-top:none; }
+  .check-item .cb { flex-shrink:0; display:flex; align-items:center; min-height:24px; cursor:pointer; }
+  .check-item input[type=checkbox] { width:18px; height:18px; accent-color:#0E9F6E; cursor:pointer; }
+  .check-item .txt { font-size:14px; line-height:1.7; color:#3D424A; word-break:break-word; flex:1; min-width:0; }
+  .check-item .txt a { color:#2563EB; text-decoration:none; border-bottom:1px solid #BFDBFE; }
+  .check-item.done .txt { text-decoration:line-through; color:#9BA1AA; }
+  .check-item.done .txt a { color:#B6BCC4; border-color:transparent; }
 </style>
 </head>
 <body>
@@ -63,6 +80,16 @@
       <span class="day-mark" id="dayMark"></span>
     </div>
     <div class="total-line" id="totalLine">当日总量：—</div>
+    <div class="prog" id="progWrap">
+      <svg class="ring" viewBox="0 0 64 64" aria-hidden="true">
+        <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="6"/>
+        <circle cx="32" cy="32" r="26" fill="none" stroke="#4ADE80" stroke-width="6" stroke-linecap="round" stroke-dasharray="163.36" stroke-dashoffset="163.36" transform="rotate(-90 32 32)" id="ringArc"/>
+      </svg>
+      <div class="prog-info">
+        <div class="prog-pct" id="ringPct">0%</div>
+        <div class="prog-sub" id="progSub">今日完成 0/0</div>
+      </div>
+    </div>
   </header>
 
   <nav>
@@ -95,9 +122,61 @@ function linkify(s){
   var e = esc(s);
   return e.replace(/(https?:\/\/[^\s\u3000-\u303f\uff00-\uffef，。；、]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');
 }
-function seg(name, cls, time, content){
+function seg(name, cls, time, content, date){
   if(!content) return '';
-  return '<div class="card"><div class="label"><span class="dot '+cls+'"></span>'+name+'<span class="time">'+esc(time)+'</span></div><div class="body">'+linkify(content)+'</div></div>';
+  var items = segItems(content);
+  if(!items.length) return '';
+  var lis = items.map(function(txt,i){
+    var k = date+'|'+name+'|'+i;
+    var done = loadDone(k);
+    return '<div class="check-item'+(done?' done':'')+'"><label class="cb"><input type="checkbox" data-k="'+esc(k)+'"'+(done?' checked':'')+'></label><span class="txt">'+linkify(txt)+'</span></div>';
+  }).join('');
+  return '<div class="card"><div class="label"><span class="dot '+cls+'"></span>'+name+'<span class="time">'+esc(time)+'</span></div><div class="body">'+lis+'</div></div>';
+}
+
+/* ===== 进度追踪（localStorage 持久化）===== */
+function loadAll(){
+  try{ return JSON.parse(localStorage.getItem('studyProgressV1')||'{}'); }catch(e){ return {}; }
+}
+function saveAll(o){ try{ localStorage.setItem('studyProgressV1', JSON.stringify(o)); }catch(e){} }
+var PROG = loadAll();
+function loadDone(k){ return !!PROG[k]; }
+function toggleDone(k,on){
+  if(on) PROG[k]=true; else delete PROG[k];
+  saveAll(PROG);
+}
+function segItems(s){ return (s||'').split(/[；;]/).map(function(x){return x.trim();}).filter(Boolean); }
+function segDoneCount(d){
+  var segs = [['早学',d.morning],['上班碎片',d.frag],['晚上',d.evening],['复习/收尾',d.review]];
+  var total=0, done=0;
+  segs.forEach(function(p){
+    segItems(p[1]).forEach(function(_,i){
+      total++;
+      if(loadDone(d.date+'|'+p[0]+'|'+i)) done++;
+    });
+  });
+  return {total:total, done:done};
+}
+function updateProg(d){
+  var wrap = document.getElementById('progWrap');
+  var pctEl = document.getElementById('ringPct');
+  var sub = document.getElementById('progSub');
+  var arc = document.getElementById('ringArc');
+  var C = 163.36;
+  var isRest = (d.total||'').indexOf('休息')>=0;
+  if(isRest){
+    if(wrap) wrap.classList.add('prog-rest');
+    if(pctEl) pctEl.textContent = '休息';
+    if(sub) sub.textContent = '今日不学习，好好恢复';
+    if(arc) arc.style.strokeDashoffset = C;
+    return;
+  }
+  if(wrap) wrap.classList.remove('prog-rest');
+  var c = segDoneCount(d);
+  var pct = c.total ? Math.round(c.done/c.total*100) : 0;
+  if(pctEl) pctEl.textContent = pct+'%';
+  if(sub) sub.textContent = ((d.date===todayStr())?'今日':'当日')+'完成 '+c.done+'/'+c.total;
+  if(arc) arc.style.strokeDashoffset = C*(1-pct/100);
 }
 
 var WD = ['周日','周一','周二','周三','周四','周五','周六'];
@@ -119,10 +198,10 @@ function render(){
   if((d.total||'').indexOf('休息')>=0){
     html += '<div class="rest"><div class="big">今日休息</div><div class="sub">'+linkify(d.evening||d.morning||'好好休息，恢复精力。')+'</div></div>';
   } else {
-    html += seg('早学','dot-morning','07:55-08:45',d.morning);
-    html += seg('上班碎片','dot-frag','白天 · 手机',d.frag);
-    html += seg('晚上','dot-evening','18:30-22:00',d.evening);
-    html += seg('复习 / 收尾','dot-review','',d.review);
+    html += seg('早学','dot-morning','07:55-08:45',d.morning,d.date);
+    html += seg('上班碎片','dot-frag','白天 · 手机',d.frag,d.date);
+    html += seg('晚上','dot-evening','18:30-22:00',d.evening,d.date);
+    html += seg('复习 / 收尾','dot-review','',d.review,d.date);
     if(d.links){
       html += '<div class="block-title"><span class="idx">1</span>今日去哪学</div><div class="links">'+linkify(d.links)+'</div>';
     }
@@ -133,6 +212,7 @@ function render(){
   document.getElementById('view').innerHTML = html;
   document.getElementById('prevBtn').disabled = (cur===0);
   document.getElementById('nextBtn').disabled = (cur===DATA.length-1);
+  updateProg(d);
 }
 
 document.getElementById('prevBtn').addEventListener('click', function(){ if(cur>0){cur--;render();} });
@@ -141,6 +221,15 @@ document.getElementById('todayBtn').addEventListener('click', function(){
   var t = findIdx(todayStr());
   cur = t>=0 ? t : DATA.length-1;
   render();
+});
+document.getElementById('view').addEventListener('change', function(e){
+  var el = e.target;
+  if(el && el.type==='checkbox' && el.dataset.k){
+    toggleDone(el.dataset.k, el.checked);
+    var row = el.closest('.check-item');
+    if(row) row.classList.toggle('done', el.checked);
+    updateProg(DATA[cur]);
+  }
 });
 render();
 </script>
